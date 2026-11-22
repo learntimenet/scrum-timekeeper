@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Daily Timekeeper",
   "version": "1.0.0",
-  "description": "Timekeeper for scrum dailies: per-person timeboxes, meeting timebox, speaking queue, parking lot and summary.",
+  "description": "Keep scrum dailies on time: per-person countdown, meeting timebox, speaker queue, parking lot and a shareable summary.",
   "permissions": ["storage", "alarms", "notifications", "sidePanel"],
   "action": {
     "default_title": "Daily Timekeeper",
