@@ -47,6 +47,9 @@ const saveSetting = (key, value) => S.save({ settings: { ...state.settings, [key
 for (const [id, [key, read]] of Object.entries(settingInputs)) {
   $(id).addEventListener('change', (e) => saveSetting(key, read(e.target)));
 }
+// Size the tile inputs to their content so the unit sits right after the number.
+const fitInput = (input) => (input.style.width = `${Math.max(1, input.value.length) + 0.2}ch`);
+document.querySelectorAll('.tile input').forEach((i) => i.addEventListener('input', () => fitInput(i)));
 $('team-minus').addEventListener('click', () => saveSetting('teamSize', clampTeam(state.settings.teamSize - 1)));
 $('team-plus').addEventListener('click', () => saveSetting('teamSize', clampTeam(state.settings.teamSize + 1)));
 
@@ -63,13 +66,19 @@ function renderSetup() {
     if (input.type === 'checkbox') input.checked = settings[key];
     else input.value = toInput(settings[key]);
   }
+  document.querySelectorAll('.tile input').forEach(fitInput);
   $('team-minus').disabled = settings.teamSize <= 1;
   $('team-plus').disabled = settings.teamSize >= 50;
 
-  const planned = settings.teamSize * settings.speakerSeconds;
-  const fits = planned <= settings.meetingMinutes * 60;
-  $('setup-summary').textContent = `${settings.teamSize} × ${S.fmt(settings.speakerSeconds * 1000)} = ${S.fmt(planned * 1000)} of ${settings.meetingMinutes}:00`;
-  $('setup-summary').style.color = fits ? '' : 'var(--over)';
+  const planned = settings.teamSize * settings.speakerSeconds * 1000;
+  const box = settings.meetingMinutes * 60000;
+  const fits = planned <= box;
+  $('fit').classList.toggle('bad', !fits);
+  $('fit-fill').style.width = `${Math.min(100, (planned / box) * 100)}%`;
+  $('setup-summary').textContent = `${S.fmt(planned)} planned of ${S.fmt(box)}`;
+  const note = $('fit-note');
+  note.className = `pill ${fits ? 'ok' : 'bad'}`;
+  note.textContent = fits ? `${S.fmt(box - planned)} buffer` : `${S.fmt(planned - box)} over`;
 }
 
 // ================= MEETING =================
@@ -106,10 +115,16 @@ document.addEventListener('keydown', (e) => {
 
 function renderMeetingStatic() {
   const m = state.meeting;
-  $('btn-pause').textContent = m.status === 'paused' ? 'Resume' : 'Pause';
+  const paused = m.status === 'paused';
+  $('btn-pause').classList.toggle('is-paused', paused);
+  $('btn-pause').setAttribute('aria-label', paused ? 'Resume' : 'Pause');
   $('btn-prev').disabled = m.index === 0;
   $('btn-later').disabled = m.index >= m.order.length - 1;
-  $('btn-next').textContent = m.index >= m.order.length - 1 ? 'Finish' : 'Next';
+  const last = m.index >= m.order.length - 1;
+  $('btn-next').classList.toggle('is-finish', last);
+  $('next-label').textContent = last ? 'Finish' : 'Next';
+  $('next-sub').textContent = last ? 'Wrap up' : m.order[m.index + 1].name;
+  $('btn-next').setAttribute('aria-label', last ? 'Finish the daily' : `Next: ${m.order[m.index + 1].name}`);
   $('meeting-box').textContent = S.fmt(m.meetingSeconds * 1000);
   if (document.activeElement !== $('notes')) $('notes').value = m.notes ?? '';
 }
@@ -144,8 +159,8 @@ function tick() {
   bar.style.background = total > meetingMs ? 'var(--over)' : total > meetingMs * 0.8 ? 'var(--warn)' : 'var(--accent)';
   const projected = S.projectedTotal(m, now);
   const fc = $('meeting-forecast');
-  fc.className = projected > meetingMs ? 'forecast-over' : 'forecast-ok';
-  fc.textContent = projected > meetingMs ? `≈ ${S.fmt(projected - meetingMs)} over` : 'on track';
+  fc.className = `pill ${projected > meetingMs ? 'bad' : 'ok'}`;
+  fc.textContent = projected > meetingMs ? `≈ ${S.fmt(projected - meetingMs)} over` : 'On track';
 
   renderQueue(m, now, speakerMs);
 
@@ -172,8 +187,9 @@ function renderQueue(m, now, speakerMs) {
       const li = el('li', { className: i < m.index ? 'done' : i === m.index ? 'current' : 'upcoming' });
       li.dataset.index = i;
       if (i !== m.index) li.title = `Switch to ${p.name}`;
-      li.append(el('span', { className: 'dot' }), el('span', { className: 'name', textContent: p.name }));
-      if (m.deferred.includes(p.id) && i >= m.index) li.append(el('span', { className: 'tag', textContent: 'later' }));
+      li.setAttribute('aria-label', p.name);
+      li.append(avatar(p));
+      if (m.deferred.includes(p.id) && i >= m.index) li.append(el('span', { className: 'tag', title: 'Moved to later' }));
       li.append(el('span', { className: 't' }));
       return li;
     }));
@@ -183,7 +199,7 @@ function renderQueue(m, now, speakerMs) {
     const li = list.children[i];
     const spent = S.speakerElapsed(m, p.id, now);
     li.classList.toggle('over', spent > speakerMs);
-    li.lastChild.textContent = spent ? S.fmt(spent) : '';
+    li.lastChild.textContent = spent ? S.fmt(spent) : i > m.index ? '' : '0:00';
   });
 }
 
@@ -191,8 +207,9 @@ function renderQueue(m, now, speakerMs) {
 $('btn-new').addEventListener('click', () => S.save({ meeting: S.reset() }));
 $('btn-copy').addEventListener('click', async () => {
   await navigator.clipboard.writeText(summaryText());
-  $('btn-copy').textContent = 'Copied ✓';
-  setTimeout(() => ($('btn-copy').textContent = 'Copy summary'), 1500);
+  const label = $('btn-copy').querySelector('span');
+  label.textContent = 'Copied!';
+  setTimeout(() => (label.textContent = 'Copy summary'), 1500);
 });
 
 function renderSummary() {
@@ -202,10 +219,19 @@ function renderSummary() {
   const speakerMs = m.speakerSeconds * 1000;
   $('sum-total').textContent = S.fmt(total);
   const diff = total - box;
+  $('sum-verdict').className = `pill ${diff > 0 ? 'bad' : 'ok'}`;
   $('sum-verdict').textContent = diff > 0
     ? `${S.fmt(diff)} over the ${S.fmt(box)} timebox`
-    : `${S.fmt(-diff)} under the ${S.fmt(box)} timebox 🎉`;
-  $('sum-verdict').style.color = diff > 0 ? 'var(--over)' : 'var(--ok-text)';
+    : `${S.fmt(-diff)} under the ${S.fmt(box)} timebox`;
+
+  const spoke = m.order.filter((p) => (m.spent[p.id] ?? 0) > 0);
+  const overruns = spoke.filter((p) => m.spent[p.id] > speakerMs).length;
+  const avg = spoke.length ? spoke.reduce((a, p) => a + m.spent[p.id], 0) / spoke.length : 0;
+  $('sum-stats').replaceChildren(
+    stat(String(spoke.length), 'speakers'),
+    stat(S.fmt(avg), 'avg / person'),
+    stat(String(overruns), overruns === 1 ? 'overrun' : 'overruns'),
+  );
 
   const max = Math.max(speakerMs, ...m.order.map((p) => m.spent[p.id] ?? 0));
   $('sum-list').replaceChildren(...m.order.map((p) => {
@@ -214,6 +240,7 @@ function renderSummary() {
     const bar = el('div', { className: 'bar' });
     bar.append(el('div', { style: `width:${(spent / max) * 100}%` }));
     li.append(
+      avatar(p),
       el('span', { className: 'name', textContent: p.name }),
       el('span', { className: 't', textContent: spent ? `${S.fmt(spent)}${spent > speakerMs ? ` (+${S.fmt(spent - speakerMs)})` : ''}` : 'did not speak' }),
       bar,
@@ -256,6 +283,16 @@ render();
 setInterval(tick, 250);
 
 // ================= helpers =================
+function avatar(p) {
+  return el('span', { className: 'avatar', textContent: p.id.replace(/^s/, '') });
+}
+
+function stat(value, label) {
+  const d = el('div', { className: 'stat' });
+  d.append(el('b', { textContent: value }), el('span', { textContent: label }));
+  return d;
+}
+
 function el(tag, props = {}, data = {}) {
   const node = Object.assign(document.createElement(tag), props);
   if (props.ariaLabel) node.setAttribute('aria-label', props.ariaLabel);
